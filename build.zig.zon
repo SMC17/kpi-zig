@@ -1,0 +1,14 @@
+.{
+    .name = .kpi,
+    .version = "0.0.1",
+    .fingerprint = 0xa0925dd9ac927acc,
+    .minimum_zig_version = "0.16.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "LICENSE",
+        "README.md",
+        "CHANGELOG.md",
+    },
+}
