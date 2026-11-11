@@ -1,5 +1,7 @@
 # kpi-zig
 
+Try the [self-contained task](docs/SELF_SERVE.md): `zig build demo`.
+
 [![License: AGPL-3.0-or-later](https://img.shields.io/badge/License-AGPL--3.0--or--later-blue.svg)](LICENSE)
 [![Zig](https://img.shields.io/badge/Zig-0.16-orange.svg)](https://ziglang.org/)
 
@@ -12,7 +14,7 @@ Cohort retention, funnels, growth accounting, and RFM segmentation in Zig 0.16. 
 ## What ships
 
 - `retentionCurve(activities, cohort_signup_day, max_offset_days)` — daily-grain retention against the signup-cohort base.
-- `funnelStats(events, num_steps)` — bitmask-based contiguous-from-zero step counting. A user who hit step 2 without hitting steps 0+1 does not count for step 2.
+- `funnelStats(events, num_steps)` — timestamp-ordered contiguous-from-zero step counting. A user who hit step 2 without hitting steps 0+1 does not count for step 2.
 - `growthDecomposition(last_period, this_period, prior)` — `(new, resurrected, retained, churned)` over a `(last → this)` transition with `delta()` helper.
 - `rfmQuintiles(customers, today)` — quintile binning per R, F, M dimension with binary-search-over-sorted-values. `RfmScore.segment()` returns one of `champion / new / at_risk / lost / active`.
 
