@@ -95,40 +95,35 @@ pub fn funnelStats(
     events: []const FunnelEvent,
     num_steps: u8,
 ) ![]FunnelStepStat {
-    // For each user, find the highest contiguous step they reached,
-    // walking from step 0 upward; out-of-order events count only
-    // toward their declared step if all prior steps were also seen.
-    var user_max: std.AutoHashMap(u64, u8) = .init(allocator);
-    defer user_max.deinit();
-    var user_steps: std.AutoHashMap(u64, u64) = .init(allocator); // user_id → bitmask of steps seen
-    defer user_steps.deinit();
-
-    for (events) |e| {
-        if (e.step >= num_steps) continue;
-        const gop = try user_steps.getOrPut(e.user_id);
-        if (!gop.found_existing) gop.value_ptr.* = 0;
-        gop.value_ptr.* |= @as(u64, 1) << @intCast(e.step);
-    }
-
-    var it = user_steps.iterator();
-    while (it.next()) |kv| {
-        var s: u8 = 0;
-        var contiguous: u8 = 0;
-        while (s < num_steps) : (s += 1) {
-            if ((kv.value_ptr.* & (@as(u64, 1) << @intCast(s))) != 0) {
-                contiguous = s + 1; // user reached step s
-            } else break;
+    // Use event time, preserving input order when timestamps tie. Seeing all
+    // step labels is insufficient: a premature later step is not a conversion.
+    const Indexed = struct { event: FunnelEvent, ordinal: usize };
+    const ordered = try allocator.alloc(Indexed, events.len);
+    defer allocator.free(ordered);
+    for (events, 0..) |event, ordinal| ordered[ordinal] = .{ .event = event, .ordinal = ordinal };
+    std.mem.sort(Indexed, ordered, {}, struct {
+        fn lessThan(_: void, left: Indexed, right: Indexed) bool {
+            if (left.event.ts_unix != right.event.ts_unix) return left.event.ts_unix < right.event.ts_unix;
+            return left.ordinal < right.ordinal;
         }
-        if (contiguous > 0) try user_max.put(kv.key_ptr.*, contiguous - 1);
+    }.lessThan);
+    var user_next: std.AutoHashMap(u64, u8) = .init(allocator);
+    defer user_next.deinit();
+    for (ordered) |item| {
+        const event = item.event;
+        if (event.step >= num_steps) continue;
+        const entry = try user_next.getOrPut(event.user_id);
+        if (!entry.found_existing) entry.value_ptr.* = 0;
+        if (event.step == entry.value_ptr.*) entry.value_ptr.* += 1;
     }
 
     const stats = try allocator.alloc(FunnelStepStat, num_steps);
     var step: u8 = 0;
     while (step < num_steps) : (step += 1) {
         var count: u32 = 0;
-        var it2 = user_max.iterator();
+        var it2 = user_next.iterator();
         while (it2.next()) |kv| {
-            if (kv.value_ptr.* >= step) count += 1;
+            if (kv.value_ptr.* > step) count += 1;
         }
         stats[step] = .{ .step = step, .users_reached = count, .pct_of_top = 0.0 };
     }
@@ -382,4 +377,31 @@ test "RfmScore.segment names buckets" {
     try testing.expectEqualStrings("new", new_user.segment());
     const at_risk: RfmScore = .{ .user_id = 0, .r = 1, .f = 5, .m = 5 };
     try testing.expectEqualStrings("at_risk", at_risk.segment());
+}
+
+test "funnel rejects a premature later step and admits a later retry" {
+    const events = [_]FunnelEvent{
+        .{ .user_id = 1, .step = 1, .ts_unix = 1 },
+        .{ .user_id = 1, .step = 0, .ts_unix = 2 },
+        .{ .user_id = 2, .step = 1, .ts_unix = 1 },
+        .{ .user_id = 2, .step = 0, .ts_unix = 2 },
+        .{ .user_id = 2, .step = 1, .ts_unix = 3 },
+    };
+    const stats = try funnelStats(testing.allocator, &events, 2);
+    defer testing.allocator.free(stats);
+    try testing.expectEqual(@as(u32, 2), stats[0].users_reached);
+    try testing.expectEqual(@as(u32, 1), stats[1].users_reached);
+}
+
+test "funnel uses timestamps and preserves event order for equal timestamps" {
+    const events = [_]FunnelEvent{
+        .{ .user_id = 1, .step = 1, .ts_unix = 2 },
+        .{ .user_id = 1, .step = 0, .ts_unix = 1 },
+        .{ .user_id = 2, .step = 1, .ts_unix = 4 },
+        .{ .user_id = 2, .step = 0, .ts_unix = 4 },
+    };
+    const stats = try funnelStats(testing.allocator, &events, 2);
+    defer testing.allocator.free(stats);
+    try testing.expectEqual(@as(u32, 2), stats[0].users_reached);
+    try testing.expectEqual(@as(u32, 1), stats[1].users_reached);
 }
